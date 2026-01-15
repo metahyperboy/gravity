@@ -185,12 +185,24 @@ const Calculations = {
             date.setDate(date.getDate() - i);
             date.setHours(0, 0, 0, 0);
 
-            const dateStr = date.toISOString().split('T')[0];
+            // FIXED: Use local date string instead of UTC toISOString()
+            // This prevents timezone shift that was causing wrong dates
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const dateStr = `${year}-${month}-${day}`;
+
             const hasLog = dailyLogs.some(log => log.date === dateStr);
+
+            // Format display label with month and day
+            const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const displayLabel = `${monthNames[date.getMonth()]} ${date.getDate()}`;
 
             calendar.push({
                 date: dateStr,
                 day: date.getDate(),
+                displayLabel: displayLabel,
                 logged: hasLog
             });
         }

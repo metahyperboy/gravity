@@ -11,6 +11,7 @@ let appState = {
   yearGoals: [],
   quarters: [],
   dailyLogs: [],
+  dailyTasks: [],  // NEW: Store daily tasks with quarter goal alignment
   weeklyReflections: [],
   setupComplete: false,
   currentView: 'setup'
@@ -44,6 +45,10 @@ function loadData() {
   if (stored) {
     try {
       appState = JSON.parse(stored);
+      // SAFETY: Ensure dailyTasks exists for backward compatibility
+      if (!appState.dailyTasks) {
+        appState.dailyTasks = [];
+      }
     } catch (e) {
       console.error('Failed to load data:', e);
     }
@@ -424,6 +429,7 @@ function renderQuarterSummary(quarter) {
   `;
 }
 
+
 // ========== TODAY (DAILY TRACKER) VIEW ==========
 function renderTodayView() {
   const container = document.getElementById('today-container');
@@ -445,6 +451,9 @@ function renderTodayView() {
   const lastLog = appState.dailyLogs[appState.dailyLogs.length - 1];
   const streak = Calculations.calculateConsistencyStreak(appState.dailyLogs);
 
+  // Get today's tasks
+  const todayTasks = appState.dailyTasks.filter(task => task.date === today);
+
   container.innerHTML = `
     <div class="card">
       <div class="card-header">
@@ -461,10 +470,167 @@ function renderTodayView() {
         </p>
       ` : ''}
       
-      ${todayLog ? renderTodayLogSummary(todayLog) : renderDailyLogForm(currentQuarter)}
+      <!-- DAILY TASKS SECTION -->
+      ${renderDailyTasksSection(todayTasks, currentQuarter, goal)}
+      
+      <!-- WORK LOGGING SECTION -->
+      <div style="margin-top: var(--space-8); padding-top: var(--space-6); border-top: 2px solid var(--color-border);">
+        <h3 class="mb-4">End of Day Summary</h3>
+        ${todayLog ? renderTodayLogSummary(todayLog) : renderDailyLogForm(currentQuarter)}
+      </div>
     </div>
   `;
 }
+
+// ========== DAILY TASKS SECTION ==========
+function renderDailyTasksSection(tasks, currentQuarter, goal) {
+  return `
+    <div class="daily-tasks-container">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-4);">
+        <h3 style="margin: 0;">Today's Tasks</h3>
+        <span class="task-count-badge">${tasks.length} task${tasks.length !== 1 ? 's' : ''}</span>
+      </div>
+      
+      ${tasks.length > 0 ? `
+        <div class="task-list-daily">
+          ${tasks.map(task => `
+            <div class="task-row-daily">
+              <input type="checkbox" class="task-checkbox-daily" 
+                     ${task.completed ? 'checked' : ''} 
+                     onchange="toggleTaskComplete('${task.id}')"/>
+              <span class="task-text-daily ${task.completed ? 'completed' : ''}">${task.taskText}</span>
+              <button class="task-delete-btn" onclick="deleteDailyTask('${task.id}')" title="Delete task">✕</button>
+            </div>
+          `).join('')}
+        </div>
+      ` : `
+        <div class="empty-tasks-message">
+          <p class="text-muted text-center">No tasks added yet. Start by adding your first task!</p>
+        </div>
+      `}
+      
+      <div style="margin-top: var(--space-4);">
+        <div class="task-input-container">
+          <input type="text" 
+                 id="new-task-input" 
+                 class="form-input" 
+                 placeholder="Add a task that supports: ${goal ? goal.title : 'your quarter goal'}..."
+                 maxlength="100"
+                 onkeypress="if(event.key === 'Enter') { event.preventDefault(); addDailyTask(); }" />
+          <button class="btn" onclick="addDailyTask()" style="margin-top: var(--space-2);">+ Add Task</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ========== DAILY TASK FUNCTIONS ==========
+function addDailyTask() {
+  const input = document.getElementById('new-task-input');
+  const taskText = input.value.trim();
+
+  if (!taskText) {
+    return;
+  }
+
+  const currentQuarter = getCurrentActiveQuarter();
+  if (!currentQuarter) {
+    alert('❌ No active quarter found. Plan your quarter first.');
+    return;
+  }
+
+  const goal = appState.yearGoals.find(g => g.id === currentQuarter.primaryGoalId);
+  const goalTitle = goal ? goal.title : '';
+
+  // INTELLIGENT TASK VALIDATION
+  // Block gibberish, vague tasks, and non-goal-aligned input
+  const intentValidation = Validators.validateTaskIntent(taskText, goalTitle);
+
+  if (!intentValidation.valid) {
+    if (intentValidation.reason === 'GIBBERISH') {
+      alert(
+        '❌ This task does not support your current Quarter Goal.\n\n' +
+        'You are moving in a distracted direction.\n' +
+        'Refocus on tasks that directly push your quarter goal forward.'
+      );
+    } else if (intentValidation.reason === 'VAGUE' || intentValidation.reason === 'EMPTY') {
+      alert(
+        '❌ This task is too vague to create progress.\n\n' +
+        'Rewrite it as a clear, goal-driven action.\n\n' +
+        'Examples:\n' +
+        '• "Design landing page mockup"\n' +
+        '• "Research competitor pricing"\n' +
+        '• "Write product description"'
+      );
+    }
+    input.value = '';
+    return;
+  }
+
+  // Get local date string (not UTC)
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const today = `${year}-${month}-${day}`;
+
+  // Create task data - linked to quarter goal
+  const taskData = {
+    id: `task-${Date.now()}`,
+    date: today,
+    taskText: taskText,
+    quarterGoalId: currentQuarter.primaryGoalId,
+    completed: false,
+    createdAt: new Date().toISOString()
+  };
+
+  // Basic validation (length check)
+  if (taskText.length < 3) {
+    alert('❌ Task must be at least 3 characters');
+    return;
+  }
+
+  if (taskText.length > 100) {
+    alert('❌ Task must be less than 100 characters');
+    return;
+  }
+
+  // Add task to state
+  appState.dailyTasks.push(taskData);
+  saveData();
+
+  // Clear input and re-render
+  input.value = '';
+  renderTodayView();
+}
+
+function deleteDailyTask(taskId) {
+  if (confirm('Delete this task?')) {
+    appState.dailyTasks = appState.dailyTasks.filter(t => t.id !== taskId);
+    saveData();
+    renderTodayView();
+  }
+}
+
+function toggleTaskComplete(taskId) {
+  const task = appState.dailyTasks.find(t => t.id === taskId);
+  if (task) {
+    task.completed = !task.completed;
+    saveData();
+  }
+}
+
+function showDistractionBlockedModal(taskText, goal) {
+  alert(
+    '⚠️ DISTRACTION BLOCKED\n\n' +
+    'Focus only on your current Quarter Goal.\n' +
+    'This task does not support it and is not aligned.\n\n' +
+    `Current Quarter Goal: ${goal ? goal.title : 'Unknown'}\n\n` +
+    `Blocked Task: "${taskText}"\n\n` +
+    'Only add tasks that move your quarter goal forward.'
+  );
+}
+
 
 function renderDailyLogForm(currentQuarter, existingLog = null) {
   const goal = appState.yearGoals.find(g => g.id === currentQuarter.primaryGoalId);
@@ -725,9 +891,9 @@ function renderDashboardView() {
         <p class="text-muted mb-2" style="font-size: var(--font-size-sm);">Last 30 Days</p>
         <div class="calendar-grid">
           ${calendarData.map(day => `
-            <div class="calendar-day ${day.logged ? 'logged' : ''}" 
-                 title="${day.date}">
-              ${day.day}
+            <div class="calendar-day ${day.logged ? 'logged' : 'no-work'}" 
+                 title="${day.logged ? 'Work logged: ' + day.date : 'No work logged: ' + day.date}">
+              <span class="calendar-day-text">${day.displayLabel}</span>
             </div>
           `).join('')}
         </div>

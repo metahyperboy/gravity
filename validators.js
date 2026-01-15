@@ -189,5 +189,147 @@ const Validators = {
     }
 
     return { allowed: true };
+  },
+
+  /**
+   * Validate Daily Task
+   * CRITICAL RULE: Task MUST be linked to active quarter goal
+   * If not aligned, task is blocked as a distraction
+   */
+  validateDailyTask(taskData, activeQuarterGoalId) {
+    const errors = [];
+
+    // Basic validation
+    if (!taskData.taskText || taskData.taskText.trim().length < 3) {
+      errors.push('Task must be at least 3 characters');
+    }
+
+    if (taskData.taskText && taskData.taskText.trim().length > 100) {
+      errors.push('Task must be less than 100 characters');
+    }
+
+    // CRITICAL: Quarter goal alignment check
+    if (!activeQuarterGoalId) {
+      errors.push('No active quarter goal found. Plan your quarter first.');
+      return { valid: false, errors, isDistraction: true };
+    }
+
+    // If task is not linked to the active quarter goal, it's a distraction
+    const isDistraction = taskData.quarterGoalId !== activeQuarterGoalId;
+
+    if (isDistraction) {
+      return {
+        valid: false,
+        errors: ['DISTRACTION_BLOCKED'],
+        isDistraction: true
+      };
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors,
+      isDistraction: false
+    };
+  },
+
+  /**
+   * INTELLIGENT TASK VALIDATION
+   * Validates task intent using pattern-based semantic analysis
+   * Blocks gibberish, vague tasks, and non-goal-aligned input
+   */
+  validateTaskIntent(taskText, goalTitle) {
+    const text = taskText.toLowerCase().trim();
+    const goal = (goalTitle || '').toLowerCase();
+
+    // Rule 1: Block empty or whitespace-only
+    if (!text || text.length === 0) {
+      return { valid: false, reason: 'EMPTY' };
+    }
+
+    // Rule 2: Block gibberish (random characters, no vowels, just letters)
+    const hasVowels = /[aeiou]/i.test(text);
+    const isRandomChars = /^[a-z]{1,6}$/i.test(text) && !hasVowels;
+    const isOnlyNumbers = /^[\d\s]+$/.test(text);
+    const isOnlySpecialChars = /^[^a-zA-Z0-9]+$/.test(text);
+    const isKeyboardMash = /^[qwerty]+$/i.test(text) || /^[asdf]+$/i.test(text) || /^[zxcv]+$/i.test(text);
+
+    if (isRandomChars || isOnlyNumbers || isOnlySpecialChars || isKeyboardMash) {
+      return { valid: false, reason: 'GIBBERISH' };
+    }
+
+    // Rule 3: Block too short (single word without action)
+    const words = text.split(/\s+/).filter(w => w.length > 0);
+    if (words.length === 1 && text.length < 8) {
+      return { valid: false, reason: 'VAGUE' };
+    }
+
+    // Rule 4: Check for action verbs (indicates intentional task)
+    const actionVerbs = [
+      'create', 'build', 'design', 'write', 'develop', 'code', 'program',
+      'research', 'plan', 'review', 'analyze', 'complete', 'finish',
+      'prepare', 'setup', 'configure', 'test', 'fix', 'update', 'learn',
+      'study', 'call', 'email', 'meet', 'schedule', 'organize', 'send',
+      'draft', 'edit', 'publish', 'launch', 'deploy', 'implement',
+      'document', 'outline', 'define', 'check', 'verify', 'validate',
+      'submit', 'apply', 'register', 'sign', 'contact', 'follow',
+      'read', 'watch', 'listen', 'practice', 'exercise', 'work',
+      'start', 'begin', 'continue', 'improve', 'optimize', 'refactor',
+      'make', 'do', 'get', 'set', 'run', 'go', 'find', 'search'
+    ];
+
+    const hasActionVerb = actionVerbs.some(verb =>
+      text.includes(verb) || words.some(w => w === verb || w.startsWith(verb))
+    );
+
+    // Rule 5: Check for common vague/meaningless phrases
+    const vaguePatterns = [
+      'thing', 'stuff', 'etc', 'something', 'anything', 'whatever',
+      'idk', 'dunno', 'maybe', 'probably', 'asap', 'tbd', 'n/a',
+      'test', 'testing', 'hello', 'hi', 'hey', 'ok', 'okay', 'yes', 'no',
+      'todo', 'task', 'item', 'note'
+    ];
+
+    const isVague = vaguePatterns.some(p => text === p) ||
+      (words.length < 2 && !hasActionVerb);
+
+    if (isVague && words.length < 3) {
+      return { valid: false, reason: 'VAGUE' };
+    }
+
+    // Rule 6: Minimum meaningful length
+    if (text.length < 5 && !hasActionVerb) {
+      return { valid: false, reason: 'VAGUE' };
+    }
+
+    // Rule 7: Block distraction tasks (personal/entertainment activities)
+    const distractionKeywords = [
+      'play', 'game', 'movie', 'netflix', 'youtube', 'tv', 'show',
+      'buy', 'shop', 'groceries', 'food', 'eat', 'lunch', 'dinner', 'breakfast',
+      'sleep', 'nap', 'rest', 'relax', 'chill', 'party', 'drink', 'beer',
+      'social', 'facebook', 'instagram', 'twitter', 'tiktok', 'reddit',
+      'gym', 'workout', 'exercise', 'jog', 'walk', 'run',
+      'clean', 'laundry', 'dishes', 'cook', 'vacuum',
+      'friend', 'hang', 'dating', 'date', 'girlfriend', 'boyfriend'
+    ];
+
+    const isDistraction = distractionKeywords.some(kw =>
+      words.includes(kw) || text.includes(kw)
+    );
+
+    // Check if goal contains any of the distraction keywords (allow if it's part of goal)
+    const goalAllowsDistraction = distractionKeywords.some(kw => goal.includes(kw));
+
+    if (isDistraction && !goalAllowsDistraction) {
+      return { valid: false, reason: 'GIBBERISH' };  // Treat as distraction
+    }
+
+    // Rule 8: Check for goal relevance (if goal keywords present)
+    const goalWords = goal.split(/\s+/).filter(w => w.length > 3);
+    const taskHasGoalContext = goalWords.length === 0 ||
+      goalWords.some(gw => text.includes(gw)) ||
+      hasActionVerb; // Action verbs indicate intentional work
+
+    // Passed all checks
+    return { valid: true };
   }
 };
